@@ -1,0 +1,383 @@
+{
+  "name": "Gestor Automático de Facturas (Gemini Multimodal + Validación Contable)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1. Ingesta de Comprobantes\nRecibe imágenes (`JPG`, `PNG`, `WEBP`) o `PDF` desde:\n- **Formulario Web nativo de n8n** (ideal para demos y pruebas manuales)\n- **Webhook POST** (`/webhook/extract-invoice`) para integraciones con apps o `curl`.",
+        "height": 260,
+        "width": 360,
+        "color": 4
+      },
+      "id": "sticky-ingesta",
+      "name": "Nota - Ingesta",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [160, 80]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Extracción IA + Reglas Anti-Alucinación\n1. Valida tipo MIME y tamaño del archivo.\n2. Envía el archivo a **Google Gemini Multimodal** con `responseSchema` estricto y `temperature: 0`.\n3. Ejecuta el **Validador Contable en JS** (misma lógica que `src/validator.js`): verifica `subtotal - descuento + impuestos + propina = total`, suma de ítems, tasa impositiva, fecha ISO, moneda y umbral de confianza.",
+        "height": 260,
+        "width": 640,
+        "color": 5
+      },
+      "id": "sticky-ia-validacion",
+      "name": "Nota - IA y Validación",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [560, 80]
+    },
+    {
+      "parameters": {
+        "content": "## 3. Persistencia Estructurada en Google Sheets\n- **APROBADA**: Inserta o actualiza por `fingerprint` en `Facturas_Validadas` (evita duplicados).\n- **REVISION_MANUAL**: Registra en `Revision_Manual` con detalle exacto de discrepancias matemáticas para auditoría humana.",
+        "height": 260,
+        "width": 520,
+        "color": 6
+      },
+      "id": "sticky-persistencia",
+      "name": "Nota - Persistencia",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1240, 80]
+    },
+    {
+      "parameters": {
+        "formTitle": "Extractor Automático de Facturas y Recibos",
+        "formDescription": "Sube una imagen (JPG/PNG/WEBP) o PDF de tu comprobante. Gemini extraerá los datos y el motor contable verificará matemáticamente los totales antes de guardarlos en Google Sheets.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Comprobante",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".pdf,.png,.jpg,.jpeg,.webp",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-form-trigger",
+      "name": "Formulario Web (Subir Comprobante)",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [220, 380],
+      "webhookId": "invoice-form-upload"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "extract-invoice",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Webhook API (POST /extract-invoice)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 580],
+      "webhookId": "invoice-webhook-api"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALLOWED_MIME_TYPES = new Set([\n  'application/pdf',\n  'image/jpeg',\n  'image/png',\n  'image/webp'\n]);\nconst MAX_BYTES = 15 * 1024 * 1024; // 15 MB\n\nconst item = $input.first();\nconst binaryObj = item.binary || {};\nconst binaryKeys = Object.keys(binaryObj);\n\nif (binaryKeys.length === 0) {\n  throw new Error('No se recibió ningún archivo binario (PDF o imagen) en la solicitud.');\n}\n\nconst binaryKey = binaryKeys[0];\nconst fileMeta = binaryObj[binaryKey];\nconst mimeType = fileMeta.mimeType || 'application/octet-stream';\n\nif (!ALLOWED_MIME_TYPES.has(mimeType)) {\n  throw new Error(`Tipo de archivo no soportado: ${mimeType}. Usa PDF, JPG, PNG o WEBP.`);\n}\n\nconst buffer = await this.helpers.getBinaryDataBuffer(0, binaryKey);\nif (buffer.length > MAX_BYTES) {\n  throw new Error(`El archivo excede el límite de 15 MB (${(buffer.length / 1024 / 1024).toFixed(2)} MB).`);\n}\n\nconst base64Data = buffer.toString('base64');\nconst sourceFile = fileMeta.fileName || `comprobante-${Date.now()}`;\n\nconst systemInstruction = `Eres un auditor contable experto en extracción estructurada de comprobantes fiscales (facturas, recibos, tickets y boletas).\nTu tarea es leer el archivo adjunto (imagen o PDF) y extraer únicamente los datos visibles con máxima precisión.\nReglas estrictas:\n1. NO inventes ni recalcules valores faltantes para forzar que las sumas cuadren: extrae exactamente los números impresos en el documento.\n2. Convierte todas las fechas al formato ISO YYYY-MM-DD.\n3. Normaliza la moneda al código ISO-4217 de 3 letras (USD, MXN, EUR, ARS, COP, CLP, PEN, BRL).\n4. Usa números decimales puros con punto decimal (sin símbolos de moneda ni separadores de miles).\n5. Si no existe descuento o propina, devuelve 0.\n6. Si un campo de texto no aparece, devuelve cadena vacía \"\".\n7. Asigna confianza_extraccion entre 0.0 y 1.0 reflejando la legibilidad real del documento.`;\n\nconst responseSchema = {\n  type: 'OBJECT',\n  properties: {\n    proveedor: { type: 'STRING' },\n    tax_id_proveedor: { type: 'STRING' },\n    tipo_comprobante: {\n      type: 'STRING',\n      enum: ['factura', 'recibo', 'ticket', 'boleta', 'nota_credito', 'comprobante']\n    },\n    numero_comprobante: { type: 'STRING' },\n    fecha_emision: { type: 'STRING' },\n    moneda: { type: 'STRING' },\n    subtotal: { type: 'NUMBER' },\n    descuento: { type: 'NUMBER' },\n    impuestos: { type: 'NUMBER' },\n    propina: { type: 'NUMBER' },\n    total: { type: 'NUMBER' },\n    confianza_extraccion: { type: 'NUMBER' },\n    items: {\n      type: 'ARRAY',\n      items: {\n        type: 'OBJECT',\n        properties: {\n          descripcion: { type: 'STRING' },\n          cantidad: { type: 'NUMBER' },\n          precio_unitario: { type: 'NUMBER' },\n          importe: { type: 'NUMBER' }\n        },\n        required: ['descripcion', 'importe']\n      }\n    }\n  },\n  required: [\n    'proveedor',\n    'tipo_comprobante',\n    'fecha_emision',\n    'moneda',\n    'subtotal',\n    'descuento',\n    'impuestos',\n    'propina',\n    'total',\n    'confianza_extraccion',\n    'items'\n  ]\n};\n\nreturn [\n  {\n    json: {\n      source_file: sourceFile,\n      mime_type: mimeType,\n      file_size_bytes: buffer.length,\n      gemini_request: {\n        systemInstruction: {\n          parts: [{ text: systemInstruction }]\n        },\n        contents: [\n          {\n            role: 'user',\n            parts: [\n              {\n                text: 'Extrae todos los campos contables y el detalle de ítems de este comprobante siguiendo estrictamente el esquema JSON.'\n              },\n              {\n                inlineData: {\n                  mimeType,\n                  data: base64Data\n                }\n              }\n            ]\n          }\n        ],\n        generationConfig: {\n          temperature: 0,\n          responseMimeType: 'application/json',\n          responseSchema\n        }\n      }\n    }\n  }\n];"
+      },
+      "id": "node-prepare-payload",
+      "name": "Preparar Archivo y Payload Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $env.GEMINI_MODEL || 'gemini-3.6-flash' }}:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.gemini_request) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "node-gemini-api",
+      "name": "Gemini Multimodal OCR (REST API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "const MATH_TOLERANCE = 0.02;\nconst MIN_CONFIDENCE = 0.8;\nconst MAX_TAX_RATE = 0.35;\nconst ALLOWED_CURRENCIES = new Set([\n  'USD', 'EUR', 'MXN', 'ARS', 'COP', 'CLP', 'PEN', 'BRL', 'UYU', 'PYG',\n  'BOB', 'CRC', 'DOP', 'GTQ', 'HNL', 'NIO', 'PAB', 'VES', 'GBP', 'CAD'\n]);\n\nconst round2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;\nconst toFinite = (v, fb = null) => {\n  if (v === null || v === undefined || v === '') return fb;\n  const n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, '').trim());\n  return Number.isFinite(n) ? n : fb;\n};\nconst normalizeText = (v) => (typeof v === 'string' ? v.trim().replace(/\\s+/g, ' ') : '');\nconst isValidIsoDate = (s) => {\n  if (typeof s !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(s)) return false;\n  const [y, m, d] = s.split('-').map(Number);\n  const dt = new Date(Date.UTC(y, m - 1, d));\n  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;\n};\n\n// Hash determinístico FNV-1a 64-bit hex (compatible con sandbox de n8n sin imports externos)\nfunction fingerprintHash(input) {\n  let h1 = 0xdeadbeef;\n  let h2 = 0x41c6ce57;\n  for (let i = 0; i < input.length; i++) {\n    const ch = input.charCodeAt(i);\n    h1 = Math.imul(h1 ^ ch, 2654435761);\n    h2 = Math.imul(h2 ^ ch, 1597334677);\n  }\n  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);\n  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);\n  return ((h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0'));\n}\n\nconst geminiResponse = $input.first().json;\nconst sourceFile = $('Preparar Archivo y Payload Gemini').first().json.source_file || '';\nconst rawText = geminiResponse?.candidates?.[0]?.content?.parts?.[0]?.text || '';\n\nlet extracted = null;\nconst errors = [];\nconst warnings = [];\n\ntry {\n  extracted = JSON.parse(rawText);\n} catch (err) {\n  errors.push({ code: 'INVALID_JSON', message: 'Gemini no devolvió un JSON parseable.' });\n}\n\nif (!extracted || typeof extracted !== 'object') {\n  return [{\n    json: {\n      estado_validacion: 'REVISION_MANUAL',\n      es_valida: false,\n      errores: errors,\n      advertencias: warnings,\n      registro_sheets: {\n        id_registro: `ERR-${Date.now()}`,\n        fecha_procesamiento: new Date().toISOString(),\n        estado_validacion: 'REVISION_MANUAL',\n        proveedor: 'ERROR_PARSEO',\n        errores_validacion: errors.map((e) => `[${e.code}] ${e.message}`).join(' | '),\n        archivo_origen: sourceFile\n      }\n    }\n  }];\n}\n\nconst proveedor = normalizeText(extracted.proveedor);\nconst taxId = normalizeText(extracted.tax_id_proveedor || '');\nconst tipoComprobante = normalizeText(extracted.tipo_comprobante || 'comprobante').toLowerCase();\nconst numeroComprobante = normalizeText(extracted.numero_comprobante || '');\nconst fechaEmision = normalizeText(extracted.fecha_emision);\nconst moneda = normalizeText(extracted.moneda).toUpperCase();\n\nconst subtotal = toFinite(extracted.subtotal);\nconst descuento = toFinite(extracted.descuento, 0);\nconst impuestos = toFinite(extracted.impuestos, 0);\nconst propina = toFinite(extracted.propina, 0);\nconst totalExtraido = toFinite(extracted.total);\nconst confianza = toFinite(extracted.confianza_extraccion, 0);\nconst items = Array.isArray(extracted.items) ? extracted.items : [];\n\nif (!proveedor) errors.push({ code: 'MISSING_VENDOR', message: 'Falta el nombre del proveedor.' });\nif (!fechaEmision || !isValidIsoDate(fechaEmision)) {\n  errors.push({ code: 'INVALID_DATE', message: `Fecha de emisión inválida (\"${fechaEmision}\").` });\n} else {\n  const parsedDate = new Date(`${fechaEmision}T00:00:00Z`);\n  if (parsedDate > new Date(Date.now() + 86400000)) {\n    errors.push({ code: 'FUTURE_DATE', message: `Fecha de emisión en el futuro (${fechaEmision}).` });\n  }\n}\n\nif (!moneda || !/^[A-Z]{3}$/.test(moneda)) {\n  errors.push({ code: 'INVALID_CURRENCY', message: `Moneda inválida (\"${moneda}\").` });\n} else if (!ALLOWED_CURRENCIES.has(moneda)) {\n  warnings.push({ code: 'UNCOMMON_CURRENCY', message: `Moneda poco común: ${moneda}.` });\n}\n\nif (subtotal === null || subtotal < 0) errors.push({ code: 'INVALID_SUBTOTAL', message: 'Subtotal inválido.' });\nif (totalExtraido === null || totalExtraido < 0) errors.push({ code: 'INVALID_TOTAL', message: 'Total inválido.' });\nif (descuento < 0 || impuestos < 0 || propina < 0) {\n  errors.push({ code: 'NEGATIVE_COMPONENT', message: 'Descuento, impuestos y propina deben ser >= 0.' });\n}\n\nlet totalCalculado = null;\nlet diferenciaMatematica = null;\nif (subtotal !== null && totalExtraido !== null) {\n  totalCalculado = round2(subtotal - descuento + impuestos + propina);\n  diferenciaMatematica = round2(totalExtraido - totalCalculado);\n  if (Math.abs(diferenciaMatematica) > MATH_TOLERANCE) {\n    errors.push({\n      code: 'MATH_TOTAL_MISMATCH',\n      message: `Total extraído (${totalExtraido.toFixed(2)}) != calculado (${totalCalculado.toFixed(2)}), delta ${diferenciaMatematica.toFixed(2)} ${moneda}.`\n    });\n  }\n}\n\nlet sumaItems = null;\nif (items.length > 0) {\n  let acumulado = 0;\n  items.forEach((it, idx) => {\n    const cant = toFinite(it?.cantidad);\n    const pu = toFinite(it?.precio_unitario);\n    const imp = toFinite(it?.importe);\n    if (imp === null || imp < 0) {\n      errors.push({ code: 'INVALID_LINE_ITEM', message: `Ítem #${idx + 1} sin importe válido.` });\n      return;\n    }\n    acumulado += imp;\n    if (cant !== null && pu !== null) {\n      const esp = round2(cant * pu);\n      if (Math.abs(esp - imp) > MATH_TOLERANCE) {\n        errors.push({ code: 'LINE_ITEM_CALC_MISMATCH', message: `Ítem #${idx + 1}: ${cant}×${pu}=${esp.toFixed(2)} vs ${imp.toFixed(2)}.` });\n      }\n    }\n  });\n  sumaItems = round2(acumulado);\n  const itemsTol = Math.min(0.05, Math.max(MATH_TOLERANCE, items.length * 0.01));\n  if (subtotal !== null && Math.abs(sumaItems - subtotal) > itemsTol) {\n    errors.push({ code: 'LINE_ITEMS_SUBTOTAL_MISMATCH', message: `Suma ítems (${sumaItems.toFixed(2)}) != subtotal (${subtotal.toFixed(2)}).` });\n  }\n}\n\nlet tasaImpuestoPct = 0;\nif (subtotal !== null && subtotal - descuento > 0 && impuestos > 0) {\n  const base = subtotal - descuento;\n  tasaImpuestoPct = round2((impuestos / base) * 100);\n  if (impuestos / base > MAX_TAX_RATE) {\n    errors.push({ code: 'ABNORMAL_TAX_RATE', message: `Tasa impositiva sospechosa (${tasaImpuestoPct}%).` });\n  }\n}\n\nif (confianza < MIN_CONFIDENCE) {\n  errors.push({ code: 'LOW_CONFIDENCE', message: `Confianza baja (${(confianza * 100).toFixed(1)}%).` });\n}\n\nconst esValida = errors.length === 0;\nconst estadoValidacion = esValida ? 'APROBADA' : 'REVISION_MANUAL';\nconst rawKey = [proveedor.toLowerCase(), numeroComprobante.toLowerCase(), fechaEmision, moneda, round2(totalExtraido ?? 0).toFixed(2)].join('|');\nconst fingerprint = fingerprintHash(rawKey);\n\nconst registroSheets = {\n  id_registro: `INV-${fingerprint.toUpperCase()}`,\n  fecha_procesamiento: new Date().toISOString(),\n  estado_validacion: estadoValidacion,\n  proveedor: proveedor || 'DESCONOCIDO',\n  tax_id_proveedor: taxId,\n  tipo_comprobante: tipoComprobante,\n  numero_comprobante: numeroComprobante,\n  fecha_emision: fechaEmision,\n  moneda,\n  subtotal: subtotal !== null ? round2(subtotal) : '',\n  descuento: round2(descuento),\n  impuestos: round2(impuestos),\n  propina: round2(propina),\n  total_extraido: totalExtraido !== null ? round2(totalExtraido) : '',\n  total_calculado: totalCalculado !== null ? totalCalculado : '',\n  diferencia_matematica: diferenciaMatematica !== null ? diferenciaMatematica : '',\n  tasa_impuesto_pct: tasaImpuestoPct,\n  confianza_ia: round2(confianza),\n  cantidad_items: items.length,\n  errores_validacion: errors.map((e) => `[${e.code}] ${e.message}`).join(' | '),\n  advertencias: warnings.map((w) => `[${w.code}] ${w.message}`).join(' | '),\n  fingerprint,\n  archivo_origen: sourceFile\n};\n\nreturn [{\n  json: {\n    estado_validacion: estadoValidacion,\n    es_valida: esValida,\n    errores: errors,\n    advertencias: warnings,\n    metricas_matematicas: {\n      subtotal,\n      descuento,\n      impuestos,\n      propina,\n      total_extraido: totalExtraido,\n      total_calculado: totalCalculado,\n      diferencia_matematica: diferenciaMatematica,\n      suma_items: sumaItems,\n      tasa_impuesto_pct: tasaImpuestoPct\n    },\n    registro_sheets: registroSheets\n  }\n}];"
+      },
+      "id": "node-validator",
+      "name": "Validador Contable Anti-Alucinaciones",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 480]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-is-valid",
+              "leftValue": "={{ $json.es_valida }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-valid",
+      "name": "¿Validación Aprobada?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1280, 480]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOCUMENT_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Facturas_Validadas",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_registro": "={{ $json.registro_sheets.id_registro }}",
+            "fecha_procesamiento": "={{ $json.registro_sheets.fecha_procesamiento }}",
+            "estado_validacion": "={{ $json.registro_sheets.estado_validacion }}",
+            "proveedor": "={{ $json.registro_sheets.proveedor }}",
+            "tax_id_proveedor": "={{ $json.registro_sheets.tax_id_proveedor }}",
+            "tipo_comprobante": "={{ $json.registro_sheets.tipo_comprobante }}",
+            "numero_comprobante": "={{ $json.registro_sheets.numero_comprobante }}",
+            "fecha_emision": "={{ $json.registro_sheets.fecha_emision }}",
+            "moneda": "={{ $json.registro_sheets.moneda }}",
+            "subtotal": "={{ $json.registro_sheets.subtotal }}",
+            "descuento": "={{ $json.registro_sheets.descuento }}",
+            "impuestos": "={{ $json.registro_sheets.impuestos }}",
+            "propina": "={{ $json.registro_sheets.propina }}",
+            "total_extraido": "={{ $json.registro_sheets.total_extraido }}",
+            "total_calculado": "={{ $json.registro_sheets.total_calculado }}",
+            "diferencia_matematica": "={{ $json.registro_sheets.diferencia_matematica }}",
+            "tasa_impuesto_pct": "={{ $json.registro_sheets.tasa_impuesto_pct }}",
+            "confianza_ia": "={{ $json.registro_sheets.confianza_ia }}",
+            "cantidad_items": "={{ $json.registro_sheets.cantidad_items }}",
+            "advertencias": "={{ $json.registro_sheets.advertencias }}",
+            "fingerprint": "={{ $json.registro_sheets.fingerprint }}",
+            "archivo_origen": "={{ $json.registro_sheets.archivo_origen }}"
+          },
+          "matchingColumns": ["fingerprint"]
+        },
+        "options": {}
+      },
+      "id": "node-sheets-approved",
+      "name": "Guardar en Facturas_Validadas",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1540, 360]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEETS_DOCUMENT_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Revision_Manual",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_registro": "={{ $json.registro_sheets.id_registro }}",
+            "fecha_procesamiento": "={{ $json.registro_sheets.fecha_procesamiento }}",
+            "estado_validacion": "={{ $json.registro_sheets.estado_validacion }}",
+            "proveedor": "={{ $json.registro_sheets.proveedor }}",
+            "numero_comprobante": "={{ $json.registro_sheets.numero_comprobante }}",
+            "fecha_emision": "={{ $json.registro_sheets.fecha_emision }}",
+            "moneda": "={{ $json.registro_sheets.moneda }}",
+            "subtotal": "={{ $json.registro_sheets.subtotal }}",
+            "impuestos": "={{ $json.registro_sheets.impuestos }}",
+            "total_extraido": "={{ $json.registro_sheets.total_extraido }}",
+            "total_calculado": "={{ $json.registro_sheets.total_calculado }}",
+            "diferencia_matematica": "={{ $json.registro_sheets.diferencia_matematica }}",
+            "confianza_ia": "={{ $json.registro_sheets.confianza_ia }}",
+            "errores_validacion": "={{ $json.registro_sheets.errores_validacion }}",
+            "fingerprint": "={{ $json.registro_sheets.fingerprint }}",
+            "archivo_origen": "={{ $json.registro_sheets.archivo_origen }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-sheets-review",
+      "name": "Guardar en Revision_Manual",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1540, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ estado: $('Validador Contable Anti-Alucinaciones').first().json.estado_validacion, es_valida: $('Validador Contable Anti-Alucinaciones').first().json.es_valida, registro: $('Validador Contable Anti-Alucinaciones').first().json.registro_sheets, errores: $('Validador Contable Anti-Alucinaciones').first().json.errores }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-respond-webhook",
+      "name": "Responder Resultado JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1820, 480]
+    }
+  ],
+  "connections": {
+    "Formulario Web (Subir Comprobante)": {
+      "main": [
+        [
+          {
+            "node": "Preparar Archivo y Payload Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook API (POST /extract-invoice)": {
+      "main": [
+        [
+          {
+            "node": "Preparar Archivo y Payload Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Archivo y Payload Gemini": {
+      "main": [
+        [
+          {
+            "node": "Gemini Multimodal OCR (REST API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Multimodal OCR (REST API)": {
+      "main": [
+        [
+          {
+            "node": "Validador Contable Anti-Alucinaciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validador Contable Anti-Alucinaciones": {
+      "main": [
+        [
+          {
+            "node": "¿Validación Aprobada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Validación Aprobada?": {
+      "main": [
+        [
+          {
+            "node": "Guardar en Facturas_Validadas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Guardar en Revision_Manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en Facturas_Validadas": {
+      "main": [
+        [
+          {
+            "node": "Responder Resultado JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en Revision_Manual": {
+      "main": [
+        [
+          {
+            "node": "Responder Resultado JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    {
+      "name": "gemini"
+    },
+    {
+      "name": "facturas"
+    },
+    {
+      "name": "contabilidad"
+    }
+  ]
+}

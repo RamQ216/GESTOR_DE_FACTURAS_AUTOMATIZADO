@@ -1,0 +1,22 @@
+{
+  "proveedor": "Ferretería Industrial del Norte",
+  "tax_id_proveedor": "FIN990101XY3",
+  "tipo_comprobante": "factura",
+  "numero_comprobante": "A-000912",
+  "fecha_emision": "2026-10-19",
+  "moneda": "MXN",
+  "subtotal": 1200.00,
+  "descuento": 0,
+  "impuestos": 192.00,
+  "propina": 0,
+  "total": 1492.00,
+  "confianza_extraccion": 0.91,
+  "items": [
+    {
+      "descripcion": "Taladro Percutor 800W",
+      "cantidad": 1,
+      "precio_unitario": 1200.00,
+      "importe": 1200.00
+    }
+  ]
+}

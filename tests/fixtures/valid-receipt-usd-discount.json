@@ -1,0 +1,28 @@
+{
+  "proveedor": "Blue Bottle Coffee Roasters",
+  "tax_id_proveedor": "US-94-3456789",
+  "tipo_comprobante": "recibo",
+  "numero_comprobante": "RCP-88412",
+  "fecha_emision": "2026-10-18",
+  "moneda": "USD",
+  "subtotal": 45.00,
+  "descuento": 5.00,
+  "impuestos": 3.50,
+  "propina": 6.00,
+  "total": 49.50,
+  "confianza_extraccion": 0.93,
+  "items": [
+    {
+      "descripcion": "Cappuccino Grande",
+      "cantidad": 3,
+      "precio_unitario": 6.00,
+      "importe": 18.00
+    },
+    {
+      "descripcion": "Avocado Toast",
+      "cantidad": 3,
+      "precio_unitario": 9.00,
+      "importe": 27.00
+    }
+  ]
+}

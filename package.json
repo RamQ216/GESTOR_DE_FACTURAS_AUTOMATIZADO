@@ -1,0 +1,25 @@
+{
+  "name": "gestor-de-facturas-automatizado",
+  "version": "1.0.0",
+  "description": "Extractor automático de facturas, recibos y comprobantes con Google Gemini Multimodal, n8n y validación matemática anti-alucinaciones.",
+  "type": "module",
+  "main": "src/validator.js",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "validate": "node src/cli.js"
+  },
+  "keywords": [
+    "n8n",
+    "gemini",
+    "invoice-extraction",
+    "ocr",
+    "multimodal-ai",
+    "accounting-validation",
+    "automation",
+    "google-sheets"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

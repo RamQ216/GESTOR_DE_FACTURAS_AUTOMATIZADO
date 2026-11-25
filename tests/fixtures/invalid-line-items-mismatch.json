@@ -1,0 +1,28 @@
+{
+  "proveedor": "Papelería Moderna SRL",
+  "tax_id_proveedor": "30-71234567-8",
+  "tipo_comprobante": "factura",
+  "numero_comprobante": "0001-00004521",
+  "fecha_emision": "2026-10-20",
+  "moneda": "ARS",
+  "subtotal": 15000.00,
+  "descuento": 0,
+  "impuestos": 3150.00,
+  "propina": 0,
+  "total": 18150.00,
+  "confianza_extraccion": 0.89,
+  "items": [
+    {
+      "descripcion": "Resma A4 75g",
+      "cantidad": 2,
+      "precio_unitario": 5000.00,
+      "importe": 10000.00
+    },
+    {
+      "descripcion": "Tóner Negro Compatible",
+      "cantidad": 1,
+      "precio_unitario": 3500.00,
+      "importe": 3500.00
+    }
+  ]
+}

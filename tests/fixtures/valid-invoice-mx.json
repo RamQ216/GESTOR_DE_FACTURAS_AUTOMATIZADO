@@ -1,0 +1,28 @@
+{
+  "proveedor": "Servicios Cloud Latam S.A. de C.V.",
+  "tax_id_proveedor": "SCL210514AB9",
+  "tipo_comprobante": "factura",
+  "numero_comprobante": "FAC-2026-00482",
+  "fecha_emision": "2026-10-15",
+  "moneda": "MXN",
+  "subtotal": 2500.00,
+  "descuento": 0,
+  "impuestos": 400.00,
+  "propina": 0,
+  "total": 2900.00,
+  "confianza_extraccion": 0.97,
+  "items": [
+    {
+      "descripcion": "Servidor VPS Dedicado - Plan Pro",
+      "cantidad": 2,
+      "precio_unitario": 1000.00,
+      "importe": 2000.00
+    },
+    {
+      "descripcion": "Almacenamiento S3 500GB",
+      "cantidad": 1,
+      "precio_unitario": 500.00,
+      "importe": 500.00
+    }
+  ]
+}
