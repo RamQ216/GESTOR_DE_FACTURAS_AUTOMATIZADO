@@ -55,7 +55,9 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "formSubmittedText": "¡Comprobante recibido y procesado! Revisa tu Google Sheet en las pestañas Facturas_Validadas o Revision_Manual."
+        }
       },
       "id": "node-form-trigger",
       "name": "Formulario Web (Subir Comprobante)",
@@ -68,7 +70,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "extract-invoice",
-        "responseMode": "responseNode",
+        "responseMode": "lastNode",
         "options": {}
       },
       "id": "node-webhook-trigger",
@@ -248,20 +250,6 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [1540, 600]
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ estado: $('Validador Contable Anti-Alucinaciones').first().json.estado_validacion, es_valida: $('Validador Contable Anti-Alucinaciones').first().json.es_valida, registro: $('Validador Contable Anti-Alucinaciones').first().json.registro_sheets, errores: $('Validador Contable Anti-Alucinaciones').first().json.errores }) }}",
-        "options": {
-          "responseCode": 200
-        }
-      },
-      "id": "node-respond-webhook",
-      "name": "Responder Resultado JSON",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [1820, 480]
     }
   ],
   "connections": {
@@ -332,28 +320,6 @@
         [
           {
             "node": "Guardar en Revision_Manual",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Guardar en Facturas_Validadas": {
-      "main": [
-        [
-          {
-            "node": "Responder Resultado JSON",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Guardar en Revision_Manual": {
-      "main": [
-        [
-          {
-            "node": "Responder Resultado JSON",
             "type": "main",
             "index": 0
           }
